@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>IDT Runbook: Linux Bridge Box + Wireshark — OTA Latency/Timeout Evaluation</title>
+<style>
+  /* Brand + light-first palette */
+  :root{
+    --brand-blue:#1d4ed8; /* blue */
+    --brand-yellow:#ffd200; /* yellow */
+    --brand-white:#ffffff; /* white */
+    --bg:#ffffff;
+    --card:#ffffff;
+    --ink:#111827;
+    --sub:#4b5563;
+    --accent:var(--brand-blue);
+    --muted:#e5e7eb;
+    --good:#16a34a; --warn:#f59e0b; --bad:#ef4444;
+  }
+  /* Respect users who prefer dark mode */
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#0b1020;--card:#121a33;--ink:#e9edf7;--sub:#a8b0c6;--accent:#6aa9ff;--muted:#2a3359;
+      --good:#39d98a;--warn:#ffb020;--bad:#ff6b6b
+    }
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; color:var(--ink);
+    /* Blue → White → Yellow background */
+    background:
+      radial-gradient(1100px 700px at 20% -10%, rgba(255,210,0,.18), transparent 60%),
+      radial-gradient(900px 700px at 110% 25%, rgba(29,78,216,.18), transparent 60%),
+      linear-gradient(180deg, var(--brand-blue) 0%, var(--brand-white) 55%, var(--brand-yellow) 100%);
+    background-attachment: fixed;
+    font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,Inter,Ubuntu,Helvetica,Arial
+  }
+  header{position:sticky;top:0;z-index:10;background:linear-gradient(90deg, rgba(29,78,216,.9), rgba(255,210,0,.65));backdrop-filter:blur(6px);border-bottom:1px solid rgba(0,0,0,.08)}
+  .wrap{max-width:1050px;margin:0 auto;padding:18px}
+  .title{display:flex;align-items:center;gap:12px;color:white}
+  .title h1{margin:0;font-size:1.2rem}
+  .pill{padding:3px 10px;border-radius:999px;background:rgba(255,255,255,.25);color:#fff;font-size:.8rem;border:1px solid rgba(255,255,255,.35)}
+  main{max-width:1050px;margin:24px auto;padding:0 18px 72px}
+  .grid{display:grid;grid-template-columns:280px 1fr;gap:22px}
+  nav{position:sticky;top:72px;align-self:start}
+  .card{background:var(--card);border:1px solid var(--muted);border-radius:16px;box-shadow:0 8px 28px rgba(0,0,0,.10)}
+  .toc{padding:14px}
+  .toc h3{margin:0 0 8px 0;font-size:.95rem;color:var(--sub)}
+  .toc a{display:block;padding:6px 8px;border-radius:10px;color:var(--ink);text-decoration:none}
+  .toc a:hover{background:rgba(29,78,216,.10)}
+  section.card{padding:22px}
+  section h2{margin-top:0}
+  code,kbd,pre{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}
+  pre{position:relative;background:#0d1326;color:#e5e7eb;border:1px solid #1f2a4d;border-radius:12px;padding:14px;overflow:auto}
+  pre .copy{position:absolute;top:8px;right:8px;border:1px solid #3b476e;background:#111836;color:#cbd5e1;border-radius:8px;padding:6px 10px;font-size:.85rem;cursor:pointer}
+  .kv{width:100%;border-collapse:collapse;margin:8px 0;border:1px solid var(--muted);border-radius:12px;overflow:hidden}
+  .kv th,.kv td{padding:10px 12px;border-top:1px solid var(--muted);vertical-align:top}
+  .kv th{width:210px;color:var(--sub);text-align:left;background:rgba(29,78,216,.06)}
+  .note{padding:10px 12px;border-left:4px solid var(--accent);background:rgba(29,78,216,.10);border-radius:8px}
+  .bad{border-left-color:var(--bad)}
+  .good{border-left-color:#16a34a}
+  .muted{color:var(--sub)}
+  footer{max-width:1050px;margin:24px auto;padding:0 18px 48px;color:var(--sub)}
+  .tag{display:inline-block;background:rgba(29,78,216,.10);color:#1e40af;padding:2px 8px;border-radius:999px;font-size:.8rem;border:1px solid rgba(29,78,216,.25)}
+</style>
+</head>
+<body>
+  <header>
+    <div class="wrap title">
+      <h1>IDT Runbook: Linux Bridge Box + Wireshark — OTA Latency/Timeout Evaluation</h1>
+      <span class="pill">Version 1.0</span>
+    </div>
+  </header>
+
+  <main>
+    <div class="grid">
+      <nav>
+        <div class="card toc">
+          <h3>Contents</h3>
+          <a href="#purpose">Purpose & Scope</a>
+          <a href="#prereq">Prerequisites</a>
+          <a href="#sanity">1. Access & Sanity Checks</a>
+          <a href="#impair">Network Impairments</a>
+          <a href="#capture">2. Start Packet Capture</a>
+          <a href="#trigger">3. Trigger OTA</a>
+          <a href="#stop">4. Stop Capture</a>
+          <a href="#transfer">5. Transfer Capture</a>
+          <a href="#wireshark">6. Wireshark Analysis</a>
+          <a href="#cleanup">7. Clean-up</a>
+          <a href="#blockmqtt">Block MQTT Traffic</a>
+        </div>
+      </nav>
+
+      <div>
+        <section id="purpose" class="card">
+          <h2>Purpose & Scope</h2>
+          <p>Establish a repeatable, auditable procedure to baseline OTA software updates and evaluate the impact of latency, loss, and outages using a Linux bridge box with <code>tc netem</code> and Wireshark.</p>
+          <ul>
+            <li>Baseline (no impairments) + optional UK/US-like profiles.</li>
+            <li>Packet capture, metric extraction, pass/fail gates, and evidence retention.</li>
+          </ul>
+          <div class="note bad"><strong>Safety & Security:</strong> Never publish credentials in this document. Enter passwords interactively. Always remove qdiscs and firewall rules in <em>Clean-up</em>.</div>
+        </section>
+
+        <section id="prereq" class="card">
+          <h2>Prerequisites</h2>
+          <ul>
+            <li>Linux bridge box with two NICs (e.g., <code>ens32</code> DUT-side, <code>ens34</code> WAN).</li>
+            <li>Tools: <code>iproute2</code>, <code>iptables</code>, <code>tcpdump</code>, <code>ethtool</code>, <code>bridge-utils</code>/<code>ip link</code>, NTP.</li>
+            <li>Wireshark on analysis workstation; DUT reachable; known DUT IP.</li>
+          </ul>
+          <pre><button class="copy" data-copy="timedatectl status">Copy</button><code>timedatectl status</code></pre>
+        </section>
+
+        <section id="sanity" class="card">
+          <h2>1. Access &amp; Sanity Checks</h2>
+          <pre><button class="copy" data-copy="ssh &lt;user&gt;@&lt;bridge_box_ip&gt;">Copy</button><code>ssh &lt;user&gt;@&lt;bridge_box_ip&gt;</code></pre>
+          <pre><button class="copy" data-copy="ip -br link
+bridge link
+ip -br addr">Copy</button><code>ip -br link
+bridge link
+ip -br addr</code></pre>
+          <pre><button class="copy" data-copy="sudo tc qdisc del dev ens32 root 2>/dev/null
+sudo tc qdisc del dev ens34 root 2>/dev/null
+sudo iptables -S | grep DROP || true">Copy</button><code>sudo tc qdisc del dev ens32 root 2>/dev/null
+sudo tc qdisc del dev ens34 root 2>/dev/null
+sudo iptables -S | grep DROP || true</code></pre>
+          <div class="note">Tip: To confirm the DUT-facing NIC, start a ping from the DUT to the cloud; on the bridge run <code>ip -s link</code> and watch counters.</div>
+        </section>
+
+        <section id="impair" class="card">
+          <h2>Network Impairments</h2>
+          <pre><button class="copy" data-copy="sudo tc qdisc del dev ens32 root 2>/dev/null
+sudo tc qdisc del dev ens34 root 2>/dev/null">Copy</button><code>sudo tc qdisc del dev ens32 root 2>/dev/null
+sudo tc qdisc del dev ens34 root 2>/dev/null</code></pre>
+          <h3>A) Latency-only (≈80 ms RTT with jitter)</h3>
+          <pre><button class="copy" data-copy="sudo tc qdisc replace dev ens32 root netem delay 40ms 10ms distribution normal
+sudo tc qdisc replace dev ens34 root netem delay 40ms 10ms distribution normal">Copy</button><code>sudo tc qdisc replace dev ens32 root netem delay 40ms 10ms distribution normal
+sudo tc qdisc replace dev ens34 root netem delay 40ms 10ms distribution normal</code></pre>
+          <h3>B) Loss-only</h3>
+          <pre><button class="copy" data-copy="sudo tc qdisc replace dev ens32 root netem loss 0.1%
+sudo tc qdisc replace dev ens34 root netem loss 0.1%">Copy</button><code>sudo tc qdisc replace dev ens32 root netem loss 0.1%
+sudo tc qdisc replace dev ens34 root netem loss 0.1%</code></pre>
+          <h3>C) Combined Latency + Loss (US-West-like)</h3>
+          <pre><button class="copy" data-copy="sudo tc qdisc replace dev ens32 root netem delay 80ms 20ms distribution normal loss 0.3%
+sudo tc qdisc replace dev ens34 root netem delay 80ms 20ms distribution normal loss 0.3%">Copy</button><code>sudo tc qdisc replace dev ens32 root netem delay 80ms 20ms distribution normal loss 0.3%
+sudo tc qdisc replace dev ens34 root netem delay 80ms 20ms distribution normal loss 0.3%</code></pre>
+          <h3>D) Mid-transfer Outage (10 s blackhole)</h3>
+          <pre><button class="copy" data-copy="sudo tc qdisc replace dev ens32 root netem delay 75ms 15ms
+sudo tc qdisc replace dev ens34 root netem delay 75ms 15ms">Copy</button><code>sudo tc qdisc replace dev ens32 root netem delay 75ms 15ms
+sudo tc qdisc replace dev ens34 root netem delay 75ms 15ms</code></pre>
+          <pre><button class="copy" data-copy="sudo iptables -I FORWARD -s &lt;DUT_IP&gt; -j DROP
+sleep 10
+sudo iptables -D FORWARD 1">Copy</button><code>sudo iptables -I FORWARD -s &lt;DUT_IP&gt; -j DROP
+sleep 10
+sudo iptables -D FORWARD 1</code></pre>
+          <div class="note">Use <code>tc qdisc change</code> (not <code>replace</code>) for mid-run adjustments.</div>
+        </section>
+
+        <section id="capture" class="card">
+          <h2>2. Start Packet Capture</h2>
+          <pre><button class="copy" data-copy="sudo tcpdump -i ens32 -nn -s 0 host &lt;DUT_IP&gt; -w ota_&lt;RunID&gt;.pcap">Copy</button><code>sudo tcpdump -i ens32 -nn -s 0 host &lt;DUT_IP&gt; -w ota_&lt;RunID&gt;.pcap</code></pre>
+          <div class="note good">Start this before triggering OTA. Stop with <kbd>Ctrl</kbd>+<kbd>C</kbd> once OTA completes.</div>
+        </section>
+
+        <section id="trigger" class="card">
+          <h2>3. Trigger OTA on the DUT</h2>
+          <ul>
+            <li>Start OTA from device/cloud.</li>
+            <li>Record start timestamp in <code>RunSheet_&lt;RunID&gt;.md</code>.</li>
+          </ul>
+        </section>
+
+        <section id="stop" class="card">
+          <h2>4. Stop Capture</h2>
+          <p>When OTA completes, stop tcpdump and note the end timestamp.</p>
+        </section>
+
+        <section id="transfer" class="card">
+          <h2>5. Transfer Capture to Workstation</h2>
+          <pre><button class="copy" data-copy="scp &lt;user&gt;@&lt;bridge_box_ip&gt;:/home/&lt;user&gt;/ota_&lt;RunID&gt;.pcap \&quot;$env:USERPROFILE\\Downloads\\\&quot;">Copy</button><code>scp &lt;user&gt;@&lt;bridge_box_ip&gt;:/home/&lt;user&gt;/ota_&lt;RunID&gt;.pcap "$env:USERPROFILE\Downloads\"</code></pre>
+        </section>
+
+        <section id="wireshark" class="card">
+          <h2>6. Wireshark Analysis — Metrics to Record</h2>
+          <ol>
+            <li>
+              <strong>DNS Resolution Time</strong><br/>
+              Filter:
+              <pre><button class="copy" data-copy="dns && ip.addr == 10.0.4.163">Copy</button><code>dns && ip.addr == 10.0.4.163</code></pre>
+              Select the DNS response used by the DUT and read the <code>dns.time</code> field.
+            </li>
+            <li>
+              <strong>TCP Connect Time</strong><br/>
+              Find the SYN from DUT (port 21):
+              <pre><button class="copy" data-copy="ip.src == 10.0.4.163 && tcp.dstport == 21 && tcp.flags.syn == 1 && tcp.flags.ack == 0">Copy</button><code>ip.src == 10.0.4.163 && tcp.dstport == 21 && tcp.flags.syn == 1 && tcp.flags.ack == 0</code></pre>
+              Select that SYN → press <kbd>Ctrl</kbd>+<kbd>T</kbd> (set time 0).<br/>
+              Then click the SYN/ACK from server in this stream:
+              <pre><button class="copy" data-copy="tcp.stream == 1 && tcp.flags.syn == 1">Copy</button><code>tcp.stream == 1 && tcp.flags.syn == 1</code></pre>
+              Time column on the SYN/ACK packet = <em>TCP Connect Time</em> (s).
+            </li>
+            <li>
+              <strong>FTP Login Time</strong><br/>
+              Filter the control stream and locate USER → 230:
+              <pre><button class="copy" data-copy='tcp.stream == 1 && (ftp.request.command == "USER" || ftp.response.code == 230)'>Copy</button><code>tcp.stream == 1 && (ftp.request.command == "USER" || ftp.response.code == 230)</code></pre>
+              Check the <em>Info</em> column for <code>230 Login successful</code>. Measure delta from <code>USER</code> to <code>230</code>.
+            </li>
+            <li>
+              <strong>Total OTA duration per File</strong><br/>
+              Use a stopwatch (or set a time reference at first <code>RETR</code> and read delta to final <code>226</code>).
+            </li>
+          </ol>
+        </section>
+
+        <section id="cleanup" class="card">
+          <h2>8. Clean-up (Mandatory)</h2>
+          <pre><button class="copy" data-copy="sudo tc qdisc del dev ens32 root
+sudo tc qdisc del dev ens34 root
+sudo iptables -S | grep DROP">Copy</button><code>sudo tc qdisc del dev ens32 root
+sudo tc qdisc del dev ens34 root
+sudo iptables -S | grep DROP   # Confirm no residual DROP rules</code></pre>
+          <pre><button class="copy" data-copy="tc qdisc show dev ens32
+tc qdisc show dev ens34">Copy</button><code>tc qdisc show dev ens32
+tc qdisc show dev ens34</code></pre>
+        </section>
+
+        <!-- Block MQTT Traffic (not an appendix) -->
+        <section id="blockmqtt" class="card">
+          <h2>Block MQTT Traffic</h2>
+          <p>Temporary rules to block MQTT (ports 1883/8883) across the bridge or per-device. These are <strong>not persisted</strong> and can be cleared after tests.</p>
+
+          <h3>Enable netfilter on bridged traffic</h3>
+          <pre><button class="copy" data-copy="sudo sysctl -w net.bridge.bridge-nf-call-iptables=1
+sudo sysctl -w net.bridge.bridge-nf-call-ip6tables=1">Copy</button><code>sudo sysctl -w net.bridge.bridge-nf-call-iptables=1
+sudo sysctl -w net.bridge.bridge-nf-call-ip6tables=1</code></pre>
+
+          <h3>Create temporary nftables chain</h3>
+          <pre><button class="copy" data-copy="sudo nft add table inet mqtt_test
+sudo nft 'add chain inet mqtt_test forward { type filter hook forward priority 0; policy accept; }'">Copy</button><code>sudo nft add table inet mqtt_test
+sudo nft 'add chain inet mqtt_test forward { type filter hook forward priority 0; policy accept; }'</code></pre>
+
+          <p><em>Block MQTT (bridge-wide)(optional)</em></p>
+          <pre><button class="copy" data-copy="sudo nft add rule inet mqtt_test forward tcp dport {1883,8883} drop">Copy</button><code>sudo nft add rule inet mqtt_test forward tcp dport {1883,8883} drop</code></pre>
+
+          <h3>Only block your DUT IP (optional):</h3>
+          <pre><button class="copy" data-copy="sudo nft add rule inet mqtt_test forward ip saddr &lt;DUT_IP&gt; tcp dport {1883,8883} drop">Copy</button><code>sudo nft add rule inet mqtt_test forward ip saddr &lt;DUT_IP&gt; tcp dport {1883,8883} drop</code></pre>
+
+          <h3>Verify</h3>
+          <pre><button class="copy" data-copy="sudo tcpdump -i br0 'port 1883 or port 8883'
+sudo nft list table inet mqtt_test">Copy</button><code>sudo tcpdump -i br0 'port 1883 or port 8883'
+sudo nft list table inet mqtt_test</code></pre>
+
+          <h3>Clear / Reset</h3>
+          <pre><button class="copy" data-copy="sudo nft delete table inet mqtt_test">Copy</button><code>sudo nft delete table inet mqtt_test</code></pre>
+
+          <div class="note">
+            <strong>Notes:</strong>
+            <ul>
+              <li>These nftables rules hook into the <code>forward</code> chain, affecting traffic bridged through this host.</li>
+              <li>Use the per-DUT rule to avoid impacting other devices sharing the bridge.</li>
+            </ul>
+          </div>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <p>© IDT • Single-file runbook. Print-friendly and offline capable.</p>
+  </footer>
+
+  <script>
+    // Copy-to-clipboard for code blocks
+    document.querySelectorAll('button.copy').forEach(btn=>{
+      btn.addEventListener('click',()=>{
+        const text = btn.getAttribute('data-copy');
+        navigator.clipboard.writeText(text).then(()=>{
+          const old = btn.textContent; btn.textContent='Copied!';
+          setTimeout(()=>btn.textContent=old,900);
+        });
+      });
+    });
+  </script>
+</body>
+</html>

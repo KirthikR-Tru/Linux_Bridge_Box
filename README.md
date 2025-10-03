@@ -20,18 +20,4 @@ Single-file, print-friendly runbook for measuring OTA performance using a Linux 
 2. Follow sections in order: **Access & Sanity → Impairments → Capture → Wireshark → Clean-up**.
 3. Use the **Copy** buttons on the page to run commands safely.
 
-## 🧩 Files
-- `Linux_bridge-ota.html` – the runbook (served by GitHub Pages)
-- `trumeter-favicon.png` *(optional)* – favicon/logo
 
-## 🌐 Enable GitHub Pages
-Settings → **Pages** → *Deploy from a branch* → **Branch:** `main` **/ (root)** → **Save**.  
-First deploy takes ~1 minute. Check **Actions → pages build and deployment**.
-
-## 🖨️ Print/PDF
-Use your browser’s **Print** to export a PDF for audit records. The page includes print styles for clean output.
-
-## 🖼️ Screenshots
-Create a `screenshots/` folder and upload images. Reference them here:
-```md
-![Topology](screenshots/topology.png)
